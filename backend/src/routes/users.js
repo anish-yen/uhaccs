@@ -7,29 +7,26 @@ router.post("/", (req, res) => {
   const { username } = req.body;
   if (!username) return res.status(400).json({ error: "Username is required" });
 
-  try {
-    const db = getDB();
-    const stmt = db.prepare("INSERT INTO users (username) VALUES (?)");
-    const result = stmt.run(username);
-    res.status(201).json({ id: result.lastInsertRowid, username });
-  } catch (err) {
-    if (err.message.includes("UNIQUE")) {
-      return res.status(409).json({ error: "Username already exists" });
+  const db = getDB();
+  db.run("INSERT INTO users (username) VALUES (?)", [username], function (err) {
+    if (err) {
+      if (err.message.includes("UNIQUE")) {
+        return res.status(409).json({ error: "Username already exists" });
+      }
+      return res.status(500).json({ error: err.message });
     }
-    res.status(500).json({ error: err.message });
-  }
+    res.status(201).json({ id: this.lastID, username });
+  });
 });
 
 // GET /api/users/:id — get user profile + points/streak
 router.get("/:id", (req, res) => {
-  try {
-    const db = getDB();
-    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
+  const db = getDB();
+  db.get("SELECT * FROM users WHERE id = ?", [req.params.id], (err, user) => {
+    if (err) return res.status(500).json({ error: err.message });
     if (!user) return res.status(404).json({ error: "User not found" });
     res.json(user);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  });
 });
 
 // TODO: GET /api/users/:id/stats — return detailed gamification stats

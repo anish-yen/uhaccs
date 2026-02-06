@@ -10,29 +10,28 @@ router.post("/", (req, res) => {
     return res.status(400).json({ error: "user_id and type are required" });
   }
 
-  try {
-    const db = getDB();
-    const stmt = db.prepare(
-      "INSERT INTO reminders (user_id, type, interval_minutes) VALUES (?, ?, ?)"
-    );
-    const result = stmt.run(user_id, type, interval_minutes || 30);
-    res.status(201).json({ id: result.lastInsertRowid });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  const db = getDB();
+  db.run(
+    "INSERT INTO reminders (user_id, type, interval_minutes) VALUES (?, ?, ?)",
+    [user_id, type, interval_minutes || 30],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.status(201).json({ id: this.lastID });
+    }
+  );
 });
 
 // GET /api/reminders/:userId — get all reminders for a user
 router.get("/:userId", (req, res) => {
-  try {
-    const db = getDB();
-    const reminders = db
-      .prepare("SELECT * FROM reminders WHERE user_id = ?")
-      .all(req.params.userId);
-    res.json(reminders);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  const db = getDB();
+  db.all(
+    "SELECT * FROM reminders WHERE user_id = ?",
+    [req.params.userId],
+    (err, reminders) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(reminders || []);
+    }
+  );
 });
 
 // TODO: PATCH /api/reminders/:id — update interval or toggle is_active
