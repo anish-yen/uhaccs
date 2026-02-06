@@ -32,6 +32,7 @@ function initDB() {
             points INTEGER DEFAULT 0,
             current_streak INTEGER DEFAULT 0,
             longest_streak INTEGER DEFAULT 0,
+            last_verified_at DATETIME,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
           )
         `);
