@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { getDB } = require("../db/init");
+const { broadcastScoreUpdate } = require("../ws/socket");
 
 // ── Points Configuration ────────────────────────────────────────────
 const POINTS_MAP = {
@@ -127,7 +128,8 @@ router.post("/", (req, res) => {
                 type: type,
               });
 
-              // TODO: Broadcast updated score via WebSocket to all clients
+              // Broadcast updated score via WebSocket to all clients
+              broadcastScoreUpdate(user_id, totalPointsAwarded, newStreakCount, newTotalPoints);
             }
           );
         }
