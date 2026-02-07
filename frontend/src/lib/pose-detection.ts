@@ -41,6 +41,77 @@ export interface PoseResult {
   confidence?: number;
 }
 
+/** Result from squat detection for a single frame */
+export interface SquatDetectorResult {
+  angle: number | null;
+  isDown: boolean;
+  formScore: number;
+  repIncrement: number;
+}
+
+const LEFT_HIP = 23;
+const LEFT_KNEE = 25;
+const LEFT_ANKLE = 27;
+
+const DOWN_ANGLE_THRESHOLD = 90;
+const UP_ANGLE_THRESHOLD = 160;
+
+function angleAtKnee(hip: PoseLandmark, knee: PoseLandmark, ankle: PoseLandmark): number | null {
+  const ax = hip.x - knee.x;
+  const ay = hip.y - knee.y;
+  const bx = ankle.x - knee.x;
+  const by = ankle.y - knee.y;
+  const dot = ax * bx + ay * by;
+  const magA = Math.sqrt(ax * ax + ay * ay);
+  const magB = Math.sqrt(bx * bx + by * by);
+  if (magA < 1e-6 || magB < 1e-6) return null;
+  const cosAngle = Math.max(-1, Math.min(1, dot / (magA * magB)));
+  return (Math.acos(cosAngle) * 180) / Math.PI;
+}
+
+/**
+ * Stateful squat detector using left hip, knee, ankle.
+ * Counts a rep when angle goes below DOWN_ANGLE_THRESHOLD then above UP_ANGLE_THRESHOLD.
+ */
+export class SquatDetector {
+  private wasDown = false;
+
+  detect(landmarks: PoseLandmark[]): SquatDetectorResult {
+    const result: SquatDetectorResult = {
+      angle: null,
+      isDown: false,
+      formScore: 0,
+      repIncrement: 0,
+    };
+
+    if (!landmarks || landmarks.length < 29) return result;
+
+    const leftHip = landmarks[LEFT_HIP];
+    const leftKnee = landmarks[LEFT_KNEE];
+    const leftAnkle = landmarks[LEFT_ANKLE];
+    if (!leftHip || !leftKnee || !leftAnkle) return result;
+
+    const visibility = (leftHip.visibility ?? 1) * (leftKnee.visibility ?? 1) * (leftAnkle.visibility ?? 1);
+    if (visibility < 0.1) return result;
+
+    const angle = angleAtKnee(leftHip, leftKnee, leftAnkle);
+    result.angle = angle;
+    if (angle == null) return result;
+
+    result.isDown = angle < DOWN_ANGLE_THRESHOLD;
+    result.formScore = Math.round(Math.min(100, Math.max(0, (angle / 180) * 100)));
+
+    if (result.isDown) {
+      this.wasDown = true;
+    } else if (angle >= UP_ANGLE_THRESHOLD && this.wasDown) {
+      result.repIncrement = 1;
+      this.wasDown = false;
+    }
+
+    return result;
+  }
+}
+
 // Initialize MediaPipe Pose
 export async function createPoseDetector(
   onResults: (results: PoseResult) => void

@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Camera, CameraOff, Video, VideoOff, CheckCircle2 } from 'lucide-react'
+import { Camera, CameraOff, Video, VideoOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { detectionApi } from '@/lib/api'
 import Webcam from 'react-webcam'
+import { createPoseDetector, SquatDetector } from '@/lib/pose-detection'
 
 interface WebcamViewProps {
   onExerciseDetected?: () => void
@@ -12,120 +12,88 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
   const [isStreaming, setIsStreaming] = useState(false)
   const [hasPermission, setHasPermission] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [isDetecting, setIsDetecting] = useState(false)
-  const [exerciseDetected, setExerciseDetected] = useState(false)
-  const [, setDetectionStatus] = useState<{ detected: boolean; exerciseType: string | null } | null>(null)
+  const [repCount, setRepCount] = useState(0)
+  const [angle, setAngle] = useState<number | null>(null)
+  const [formScore, setFormScore] = useState(0)
+  const [isDown, setIsDown] = useState(false)
+
   const webcamRef = useRef<Webcam>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationFrameRef = useRef<number | null>(null)
+  const poseDetectorRef = useRef<any>(null)
+  const squatDetectorRef = useRef(new SquatDetector())
+  const poseBusyRef = useRef(false)
+
+  // Initialize Pose once when camera starts (in handleUserMedia)
+  const initPose = useCallback(() => {
+    if (poseDetectorRef.current) return
+    createPoseDetector((results) => {
+      if (!results.detected || !results.landmarks?.length) return
+      const squat = squatDetectorRef.current.detect(results.landmarks)
+      setAngle(squat.angle)
+      setFormScore(squat.formScore)
+      setIsDown(squat.isDown)
+      if (squat.repIncrement > 0) {
+        setRepCount((c) => c + squat.repIncrement)
+        onExerciseDetected?.()
+      }
+    })
+      .then((pose) => {
+        poseDetectorRef.current = pose
+      })
+      .catch((err) => {
+        console.warn('Pose detector init failed:', err)
+      })
+  }, [onExerciseDetected])
+
+  const loop = useCallback(() => {
+    const video = webcamRef.current?.video
+    const pose = poseDetectorRef.current
+    if (!video || !pose || video.readyState < 2) {
+      animationFrameRef.current = requestAnimationFrame(loop)
+      return
+    }
+    if (poseBusyRef.current) {
+      animationFrameRef.current = requestAnimationFrame(loop)
+      return
+    }
+    poseBusyRef.current = true
+    pose
+      .send({ image: video })
+      .then(() => {
+        poseBusyRef.current = false
+      })
+      .catch(() => {
+        poseBusyRef.current = false
+      })
+    animationFrameRef.current = requestAnimationFrame(loop)
+  }, [])
 
   useEffect(() => {
-    // Check detection status on mount
-    checkDetectionStatus()
-    
-    // Cleanup on unmount
+    if (!isStreaming) return
+    loop()
     return () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current)
-      }
-      // react-webcam handles stream cleanup automatically
-    }
-  }, [])
-
-  const checkDetectionStatus = async () => {
-    const result = await detectionApi.getStatus()
-    if (result.data && typeof result.data === 'object') {
-      const data = result.data as { detected?: boolean; exerciseType?: string | null }
-      const status = {
-        detected: data.detected || false,
-        exerciseType: data.exerciseType || null,
-      }
-      setDetectionStatus(status)
-      setExerciseDetected(status.detected)
-    }
-  }
-
-  // Simple motion detection (can be enhanced with ML models)
-  const detectExercise = useCallback(async () => {
-    if (!webcamRef.current || !canvasRef.current) return
-
-    const video = webcamRef.current.video
-    if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return
-
-    const canvas = canvasRef.current
-    const ctx = canvas.getContext('2d')
-    
-    if (!ctx) return
-
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
-    
-    ctx.drawImage(video, 0, 0)
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    
-    // Simple motion detection: check for significant pixel changes
-    // This is a placeholder - in production, use ML models like TensorFlow.js
-    let motionDetected = false
-    const threshold = 30 // Adjust based on testing
-    
-    // Sample check (simplified - check every 10th pixel for performance)
-    for (let i = 0; i < imageData.data.length; i += 40) {
-      const r = imageData.data[i]
-      const g = imageData.data[i + 1]
-      const b = imageData.data[i + 2]
-      const brightness = (r + g + b) / 3
-      
-      // Simple heuristic: if there's significant variation, motion detected
-      if (brightness > threshold) {
-        motionDetected = true
-        break
+        animationFrameRef.current = null
       }
     }
-    
-    if (motionDetected && !exerciseDetected) {
-      // Mark exercise as detected
-      const result = await detectionApi.setDetected(true, 'exercise')
-      if (result.data) {
-        setExerciseDetected(true)
-        setDetectionStatus({ detected: true, exerciseType: 'exercise' })
-        onExerciseDetected?.()
-      }
-    }
-  }, [exerciseDetected, onExerciseDetected])
-
-  useEffect(() => {
-    if (isStreaming && isDetecting) {
-      const detect = () => {
-        detectExercise()
-        animationFrameRef.current = requestAnimationFrame(detect)
-      }
-      detect()
-    } else if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current)
-      animationFrameRef.current = null
-    }
-  }, [isStreaming, isDetecting, exerciseDetected])
+  }, [isStreaming, loop])
 
   const startCamera = () => {
     setError(null)
     setIsStreaming(true)
     setHasPermission(true)
-    // react-webcam will handle the camera access
-    // Detection will start once video is ready
   }
 
   const stopCamera = () => {
-    // react-webcam handles stream cleanup
     setIsStreaming(false)
-    setIsDetecting(false)
+    poseDetectorRef.current = null
   }
-  
-  // Handle webcam user media error
+
   const handleUserMediaError = (error: string | DOMException) => {
     console.error('Webcam error:', error)
     setHasPermission(false)
     setIsStreaming(false)
-    
     if (error instanceof DOMException) {
       if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
         setError('Camera permission denied. Please allow camera access.')
@@ -138,20 +106,10 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
       setError('Failed to access camera.')
     }
   }
-  
-  // Handle webcam user media success
+
   const handleUserMedia = () => {
     setHasPermission(true)
-    setIsDetecting(true)
-  }
-
-  const handleManualDetection = async () => {
-    const result = await detectionApi.setDetected(true, 'exercise')
-    if (result.data) {
-      setExerciseDetected(true)
-      setDetectionStatus({ detected: true, exerciseType: 'exercise' })
-      onExerciseDetected?.()
-    }
+    initPose()
   }
 
   return (
@@ -166,10 +124,10 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
         <button
           onClick={isStreaming ? stopCamera : startCamera}
           className={cn(
-            "flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all",
+            'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all',
             isStreaming
-              ? "bg-destructive/20 text-destructive hover:bg-destructive/30"
-              : "bg-primary/20 text-primary hover:bg-primary/30"
+              ? 'bg-destructive/20 text-destructive hover:bg-destructive/30'
+              : 'bg-primary/20 text-primary hover:bg-primary/30'
           )}
         >
           {isStreaming ? (
@@ -192,7 +150,7 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
             <CameraOff className="h-16 w-16 text-muted-foreground/50" />
             <div>
               <p className="text-sm font-medium text-foreground">Camera Not Active</p>
-              <p className="text-xs text-muted-foreground">Click "Start Camera" to begin</p>
+              <p className="text-xs text-muted-foreground">Click &quot;Start Camera&quot; to begin</p>
             </div>
           </div>
         )}
@@ -231,49 +189,30 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
                 objectFit: 'cover',
               }}
             />
-            <canvas ref={canvasRef} className="hidden" />
           </>
         )}
 
         {isStreaming && (
-          <div className="absolute bottom-4 left-4 flex items-center gap-2 rounded-lg bg-black/50 px-3 py-1.5 backdrop-blur-sm">
-            <div className={cn(
-              "h-2 w-2 rounded-full",
-              exerciseDetected ? "bg-green-500" : "bg-red-500 animate-pulse"
-            )} />
-            <span className="text-xs font-medium text-white">
-              {exerciseDetected ? "Exercise Detected" : "Detecting..."}
-            </span>
-          </div>
-        )}
-
-        {exerciseDetected && (
-          <div className="absolute top-4 right-4 flex items-center gap-2 rounded-lg bg-green-500/90 px-3 py-1.5 backdrop-blur-sm">
-            <CheckCircle2 className="h-4 w-4 text-white" />
-            <span className="text-xs font-medium text-white">Exercise Detected!</span>
+          <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between gap-2 rounded-lg bg-black/50 px-3 py-2 backdrop-blur-sm">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-white">Reps: {repCount}</span>
+              <span className="text-sm text-white/80">
+                Angle: {angle != null ? `${Math.round(angle)}°` : '--'}
+              </span>
+              <span className="text-sm text-white/80">Form: {formScore}</span>
+              <span className={cn('text-xs font-medium', isDown ? 'text-amber-400' : 'text-white/80')}>
+                {isDown ? 'Down' : 'Up'}
+              </span>
+            </div>
           </div>
         )}
       </div>
 
-      {isStreaming && !exerciseDetected && (
-        <div className="mt-4 flex items-center justify-center">
-          <button
-            onClick={handleManualDetection}
-            className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-all"
-          >
-            <CheckCircle2 className="h-4 w-4" />
-            Mark Exercise as Detected
-          </button>
-        </div>
-      )}
-
       {isStreaming && (
         <p className="mt-4 text-center text-xs text-muted-foreground">
-          Camera is active. You can see yourself in real-time.
+          Squats are counted automatically. Go below ~90° then stand up to ~160° to count a rep.
         </p>
       )}
     </div>
   )
 }
-
-
