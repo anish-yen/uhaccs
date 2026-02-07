@@ -1,50 +1,37 @@
 const express = require("express");
 const router = express.Router();
-const { getRedisClient } = require("../db/redis");
-
-const REMINDERS_KEY = (userId) => `user:${userId}:reminders`;
+const { getDB } = require("../db/init");
 
 // POST /api/reminders — create a new reminder
-router.post("/", async (req, res) => {
+router.post("/", (req, res) => {
   const { user_id, type, interval_minutes } = req.body;
 
   if (!user_id || !type) {
     return res.status(400).json({ error: "user_id and type are required" });
   }
 
-  try {
-    const client = await getRedisClient();
-    const remindersJson = await client.get(REMINDERS_KEY(user_id));
-    const reminders = remindersJson ? JSON.parse(remindersJson) : [];
-    
-    const newReminder = {
-      id: Date.now().toString(),
-      user_id,
-      type,
-      interval_minutes: interval_minutes || 30,
-      is_active: true,
-      created_at: new Date().toISOString(),
-    };
-    
-    reminders.push(newReminder);
-    await client.set(REMINDERS_KEY(user_id), JSON.stringify(reminders));
-    
-    res.status(201).json({ id: newReminder.id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  const db = getDB();
+  db.run(
+    "INSERT INTO reminders (user_id, type, interval_minutes) VALUES (?, ?, ?)",
+    [user_id, type, interval_minutes || 30],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.status(201).json({ id: this.lastID });
+    }
+  );
 });
 
 // GET /api/reminders/:userId — get all reminders for a user
-router.get("/:userId", async (req, res) => {
-  try {
-    const client = await getRedisClient();
-    const remindersJson = await client.get(REMINDERS_KEY(req.params.userId));
-    const reminders = remindersJson ? JSON.parse(remindersJson) : [];
-    res.json(reminders);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+router.get("/:userId", (req, res) => {
+  const db = getDB();
+  db.all(
+    "SELECT * FROM reminders WHERE user_id = ?",
+    [req.params.userId],
+    (err, reminders) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(reminders || []);
+    }
+  );
 });
 
 // TODO: PATCH /api/reminders/:id — update interval or toggle is_active
