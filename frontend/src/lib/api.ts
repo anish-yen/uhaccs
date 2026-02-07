@@ -73,4 +73,47 @@ export const detectionApi = {
   }),
 }
 
+// Pose detection API functions
+export interface PoseData {
+  landmarks: Array<{ x: number; y: number; z: number; visibility?: number }>
+  exerciseType?: string
+  confidence?: number
+  timestamp?: string
+  formScore?: number
+  repCount?: number
+}
+
+export interface PoseAnalysis {
+  exerciseType: string
+  formScore: number
+  repCount: number
+  duration: number
+  quality: string
+  feedback: string[]
+  landmarks: Array<{ x: number; y: number; z: number }>
+}
+
+export const poseApi = {
+  // Store pose detection data
+  storePoseData: (data: PoseData) => apiRequest('/pose/data', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  
+  // Store pose analysis results
+  storeAnalysis: (analysis: PoseAnalysis) => apiRequest('/pose/analysis', {
+    method: 'POST',
+    body: JSON.stringify(analysis),
+  }),
+  
+  // Get current pose data
+  getCurrentPose: () => apiRequest<{ detected: boolean; data: PoseData | null }>('/pose/data'),
+  
+  // Get pose history
+  getHistory: (limit?: number) => apiRequest<PoseData[]>(`/pose/history${limit ? `?limit=${limit}` : ''}`),
+  
+  // Get pose analysis results
+  getAnalysis: (limit?: number) => apiRequest<PoseAnalysis[]>(`/pose/analysis${limit ? `?limit=${limit}` : ''}`),
+}
+
 

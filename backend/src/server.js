@@ -16,6 +16,7 @@ const exerciseRoutes = require("./routes/exercises");
 const statsRoutes = require("./routes/stats");
 const detectionRoutes = require("./routes/detection");
 const authRoutes = require("./routes/auth");
+const poseRoutes = require("./routes/pose");
 
 const app = express();
 const server = http.createServer(app);
@@ -68,6 +69,7 @@ function registerRoutes() {
   app.use("/api/exercises", exerciseRoutes);
   app.use("/api/user/stats", statsRoutes);
   app.use("/api/detection", detectionRoutes);
+  app.use("/api/pose", poseRoutes);
 }
 
 // Health check

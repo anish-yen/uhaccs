@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom"
 import { BodyHeatmap } from "@/components/BodyHeatmap"
 import { ExerciseList } from "@/components/ExerciseList"
 import { WebcamView } from "@/components/WebcamView"
+import { PoseDetectionView } from "@/components/PoseDetectionView"
 import { getMuscleActivation, type Exercise, type UserStats } from "@/lib/exercise-data"
 import { exerciseApi, userApi, detectionApi } from "@/lib/api"
 import { getCurrentUser, logout, type User } from "@/lib/auth"
@@ -249,7 +250,21 @@ export function Dashboard() {
       </div>
 
       <main className="mx-auto max-w-7xl px-4 py-6">
-        {checkingDetection || loading ? (
+        {activeTab === "webcam" ? (
+          <div className="max-w-4xl mx-auto space-y-6">
+            <PoseDetectionView 
+              onPoseDetected={(pose) => {
+                if (pose.detected && !exerciseDetected) {
+                  setExerciseDetected(true)
+                }
+              }} 
+            />
+            <div className="rounded-xl border border-border/50 bg-card/50 backdrop-blur-sm p-6 shadow-xl">
+              <h3 className="text-lg font-bold text-foreground mb-4">Legacy Webcam View</h3>
+              <WebcamView onExerciseDetected={() => setExerciseDetected(true)} />
+            </div>
+          </div>
+        ) : checkingDetection || loading ? (
           <div className="flex flex-col items-center justify-center py-20">
             <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
             <p className="text-sm text-muted-foreground">Loading...</p>
@@ -354,11 +369,7 @@ export function Dashboard() {
               </div>
             </div>
           </>
-        ) : (
-          <div className="max-w-4xl mx-auto">
-            <WebcamView onExerciseDetected={() => setExerciseDetected(true)} />
-          </div>
-        )}
+        ) : null}
       </main>
     </div>
   )

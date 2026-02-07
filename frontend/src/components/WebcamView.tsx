@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { Camera, CameraOff, Video, VideoOff, CheckCircle2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { detectionApi } from '@/lib/api'
+import Webcam from 'react-webcam'
 
 interface WebcamViewProps {
   onExerciseDetected?: () => void
@@ -13,9 +14,8 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
   const [error, setError] = useState<string | null>(null)
   const [isDetecting, setIsDetecting] = useState(false)
   const [exerciseDetected, setExerciseDetected] = useState(false)
-  const [detectionStatus, setDetectionStatus] = useState<{ detected: boolean; exerciseType: string | null } | null>(null)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
+  const [, setDetectionStatus] = useState<{ detected: boolean; exerciseType: string | null } | null>(null)
+  const webcamRef = useRef<Webcam>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationFrameRef = useRef<number | null>(null)
 
@@ -25,28 +25,33 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
     
     // Cleanup on unmount
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop())
-      }
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current)
       }
+      // react-webcam handles stream cleanup automatically
     }
   }, [])
 
   const checkDetectionStatus = async () => {
     const result = await detectionApi.getStatus()
-    if (result.data) {
-      setDetectionStatus(result.data)
-      setExerciseDetected(result.data.detected)
+    if (result.data && typeof result.data === 'object') {
+      const data = result.data as { detected?: boolean; exerciseType?: string | null }
+      const status = {
+        detected: data.detected || false,
+        exerciseType: data.exerciseType || null,
+      }
+      setDetectionStatus(status)
+      setExerciseDetected(status.detected)
     }
   }
 
   // Simple motion detection (can be enhanced with ML models)
-  const detectExercise = async () => {
-    if (!videoRef.current || !canvasRef.current) return
+  const detectExercise = useCallback(async () => {
+    if (!webcamRef.current || !canvasRef.current) return
 
-    const video = videoRef.current
+    const video = webcamRef.current.video
+    if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return
+
     const canvas = canvasRef.current
     const ctx = canvas.getContext('2d')
     
@@ -86,7 +91,7 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
         onExerciseDetected?.()
       }
     }
-  }
+  }, [exerciseDetected, onExerciseDetected])
 
   useEffect(() => {
     if (isStreaming && isDetecting) {
@@ -101,56 +106,43 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
     }
   }, [isStreaming, isDetecting, exerciseDetected])
 
-  const startCamera = async () => {
-    try {
-      setError(null)
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: 'user',
-        },
-        audio: false,
-      })
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        streamRef.current = stream
-        setIsStreaming(true)
-        setHasPermission(true)
-        
-        // Wait for video to be ready before starting detection
-        videoRef.current.onloadedmetadata = () => {
-          setIsDetecting(true)
-        }
-      }
-    } catch (err) {
-      console.error('Error accessing camera:', err)
-      setHasPermission(false)
-      if (err instanceof Error) {
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          setError('Camera permission denied. Please allow camera access.')
-        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-          setError('No camera found. Please connect a camera device.')
-        } else {
-          setError('Failed to access camera. Please try again.')
-        }
-      } else {
-        setError('Failed to access camera.')
-      }
-    }
+  const startCamera = () => {
+    setError(null)
+    setIsStreaming(true)
+    setHasPermission(true)
+    // react-webcam will handle the camera access
+    // Detection will start once video is ready
   }
 
   const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null
-    }
+    // react-webcam handles stream cleanup
     setIsStreaming(false)
     setIsDetecting(false)
+  }
+  
+  // Handle webcam user media error
+  const handleUserMediaError = (error: string | DOMException) => {
+    console.error('Webcam error:', error)
+    setHasPermission(false)
+    setIsStreaming(false)
+    
+    if (error instanceof DOMException) {
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        setError('Camera permission denied. Please allow camera access.')
+      } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+        setError('No camera found. Please connect a camera device.')
+      } else {
+        setError(`Failed to access camera: ${error.message}`)
+      }
+    } else {
+      setError('Failed to access camera.')
+    }
+  }
+  
+  // Handle webcam user media success
+  const handleUserMedia = () => {
+    setHasPermission(true)
+    setIsDetecting(true)
   }
 
   const handleManualDetection = async () => {
@@ -219,12 +211,25 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
 
         {isStreaming && (
           <>
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
+            <Webcam
+              ref={webcamRef}
+              audio={false}
+              screenshotFormat="image/jpeg"
+              videoConstraints={{
+                width: { ideal: 1280, min: 640 },
+                height: { ideal: 720, min: 480 },
+                facingMode: 'user',
+                frameRate: { ideal: 30, min: 15 },
+              }}
+              onUserMedia={handleUserMedia}
+              onUserMediaError={handleUserMediaError}
               className="h-full w-full object-cover"
+              style={{
+                display: 'block',
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+              }}
             />
             <canvas ref={canvasRef} className="hidden" />
           </>
