@@ -7,6 +7,7 @@ const { restartAll, stopAll } = require("./scheduler/reminderScheduler");
 const reminderRoutes = require("./routes/reminders");
 const userRoutes = require("./routes/users");
 const verificationRoutes = require("./routes/verification");
+const waterRoutes = require("./routes/water");
 
 const app = express();
 const server = http.createServer(app);
@@ -19,6 +20,7 @@ app.use(express.json());
 app.use("/api/reminders", reminderRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/verification", verificationRoutes);
+app.use("/api/water", waterRoutes);
 
 // Health check
 app.get("/api/health", (_req, res) => {

@@ -3,7 +3,8 @@ import { Trophy, Zap, Flame, Target, Award, Camera, Loader2, LogOut, User as Use
 import { useNavigate } from "react-router-dom"
 import { BodyHeatmap } from "@/components/BodyHeatmap"
 import { ExerciseList } from "@/components/ExerciseList"
-import { WebcamView } from "@/components/WebcamView"
+import { WebcamView, type ExerciseType } from "@/components/WebcamView"
+import { WaterDetection } from "@/components/WaterDetection"
 import { getMuscleActivation, type Exercise, type UserStats } from "@/lib/exercise-data"
 import { exerciseApi, userApi, detectionApi } from "@/lib/api"
 import { getCurrentUser, logout, type User } from "@/lib/auth"
@@ -26,6 +27,24 @@ export function Dashboard() {
   const [checkingDetection, setCheckingDetection] = useState(true)
   const [user, setUser] = useState<User | null>(null)
   const [checkingAuth, setCheckingAuth] = useState(true)
+  const [sessionReps, setSessionReps] = useState(0)
+  const [exerciseType, setExerciseType] = useState<ExerciseType>('squat')
+  
+  // Refresh stats periodically to keep XP bar updated from backend
+  useEffect(() => {
+    if (!exerciseDetected) return
+    
+    const refreshStats = async () => {
+      const statsResult = await userApi.getStats()
+      if (statsResult.data) {
+        setUserStats(statsResult.data as UserStats)
+      }
+    }
+    
+    // Refresh every 2 seconds when exercise is detected
+    const interval = setInterval(refreshStats, 2000)
+    return () => clearInterval(interval)
+  }, [exerciseDetected])
 
   const activation = useMemo(() => getMuscleActivation(exercises), [exercises])
 
@@ -208,6 +227,17 @@ export function Dashboard() {
               </div>
             </div>
 
+            {/* Session Reps */}
+            {sessionReps > 0 && (
+              <div className="flex items-center gap-2 rounded-xl bg-primary/20 border border-primary/30 px-3 py-2">
+                <Target className="h-4 w-4 text-primary" />
+                <div className="flex flex-col">
+                  <span className="text-xs text-muted-foreground">Session Reps</span>
+                  <span className="text-sm font-bold text-primary">{sessionReps}</span>
+                </div>
+              </div>
+            )}
+
             {/* Logout */}
             <button
               onClick={handleLogout}
@@ -251,7 +281,43 @@ export function Dashboard() {
       <main className="mx-auto max-w-7xl px-4 py-6">
         {activeTab === "webcam" ? (
           <div className="max-w-4xl mx-auto space-y-6">
-            <WebcamView onExerciseDetected={() => setExerciseDetected(true)} />
+            <WebcamView 
+              onExerciseDetected={async () => {
+                setExerciseDetected(true)
+                // Refresh user stats to update XP bar
+                const statsResult = await userApi.getStats()
+                if (statsResult.data) {
+                  setUserStats(statsResult.data as UserStats)
+                }
+              }}
+              onRepComplete={async (_type, repCount) => {
+                setSessionReps(repCount)
+                // Award XP and save to backend profile
+                const statsResult = await userApi.getStats()
+                if (statsResult.data) {
+                  const stats = statsResult.data as UserStats
+                  const updatedStats = {
+                    ...stats,
+                    currentXP: stats.currentXP + 10,
+                    totalPoints: stats.totalPoints + 10,
+                  }
+                  // Save to backend - this updates the profile XP
+                  const updateResult = await userApi.updateStats(updatedStats)
+                  if (updateResult.data) {
+                    // Use the data returned from backend to ensure consistency
+                    setUserStats(updateResult.data as UserStats)
+                  } else {
+                    // Fallback to local state if update fails
+                    setUserStats(updatedStats)
+                  }
+                }
+              }}
+              exerciseType={exerciseType}
+              onExerciseTypeChange={(type) => {
+                setExerciseType(type)
+                setSessionReps(0) // Reset reps when changing exercise type
+              }}
+            />
           </div>
         ) : checkingDetection || loading ? (
           <div className="flex flex-col items-center justify-center py-20">
@@ -276,6 +342,19 @@ export function Dashboard() {
           </div>
         ) : activeTab === "dashboard" ? (
           <>
+            {/* Water Detection Card */}
+            <div className="mb-6">
+              <WaterDetection 
+                onWaterDetected={async () => {
+                  // Refresh stats when water is detected
+                  const statsResult = await userApi.getStats()
+                  if (statsResult.data) {
+                    setUserStats(statsResult.data as UserStats)
+                  }
+                }}
+              />
+            </div>
+
             {/* Stats Cards */}
             <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-xl border border-border/50 bg-gradient-to-br from-card to-card/50 p-4 shadow-lg">

@@ -41,12 +41,13 @@ export interface PoseResult {
   confidence?: number;
 }
 
-/** Result from squat detection for a single frame */
-export interface SquatDetectorResult {
+/** Result from exercise detection for a single frame */
+export interface ExerciseDetectorResult {
   angle: number | null;
   isDown: boolean;
   formScore: number;
   repIncrement: number;
+  status?: string; // For jumping jacks: 'arms-up', 'arms-down', etc.
 }
 
 const LEFT_HIP = 23;
@@ -76,8 +77,8 @@ function angleAtKnee(hip: PoseLandmark, knee: PoseLandmark, ankle: PoseLandmark)
 export class SquatDetector {
   private wasDown = false;
 
-  detect(landmarks: PoseLandmark[]): SquatDetectorResult {
-    const result: SquatDetectorResult = {
+  detect(landmarks: PoseLandmark[]): ExerciseDetectorResult {
+    const result: ExerciseDetectorResult = {
       angle: null,
       isDown: false,
       formScore: 0,
@@ -106,6 +107,70 @@ export class SquatDetector {
     } else if (angle >= UP_ANGLE_THRESHOLD && this.wasDown) {
       result.repIncrement = 1;
       this.wasDown = false;
+    }
+
+    return result;
+  }
+}
+
+/**
+ * Stateful pushup detector using wrist, elbow, and shoulder positions.
+ * Counts a rep when body goes from up to down and back up.
+ */
+export class PushupDetector {
+  private wasDown = false;
+  private wasUp = true; // Start with body up
+
+  detect(landmarks: PoseLandmark[]): ExerciseDetectorResult {
+    const result: ExerciseDetectorResult = {
+      angle: null,
+      isDown: false,
+      formScore: 0,
+      repIncrement: 0,
+      status: 'up',
+    };
+
+    if (!landmarks || landmarks.length < 33) return result;
+
+    const leftShoulder = landmarks[11];
+    const rightShoulder = landmarks[12];
+    const leftElbow = landmarks[13];
+    const rightElbow = landmarks[14];
+    const leftWrist = landmarks[15];
+    const rightWrist = landmarks[16];
+
+    if (!leftShoulder || !rightShoulder || !leftWrist || !rightWrist) return result;
+
+    const visibility = (leftShoulder.visibility ?? 1) * (rightShoulder.visibility ?? 1) * 
+                       (leftWrist.visibility ?? 1) * (rightWrist.visibility ?? 1);
+    if (visibility < 0.1) return result;
+
+    // Calculate average positions
+    const avgShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+    const avgWristY = (leftWrist.y + rightWrist.y) / 2;
+    
+    // For pushups: body is "down" when wrists are significantly below shoulders
+    // (indicating the body is lowered)
+    const isDown = avgWristY > avgShoulderY + 0.1;
+    const isUp = avgWristY < avgShoulderY + 0.05;
+
+    // Calculate form score based on body alignment and symmetry
+    const wristSymmetry = 1 - Math.abs(leftWrist.y - rightWrist.y);
+    const shoulderSymmetry = 1 - Math.abs(leftShoulder.y - rightShoulder.y);
+    const alignment = isDown ? 0.8 : (isUp ? 1.0 : 0.9); // Better form when fully up or down
+    result.formScore = Math.round(Math.min(100, Math.max(0, (wristSymmetry * shoulderSymmetry * alignment) * 100)));
+
+    result.status = isDown ? 'down' : (isUp ? 'up' : 'transitioning');
+    result.isDown = isDown;
+
+    // State machine: up -> down -> up = 1 rep
+    if (isDown && this.wasUp) {
+      this.wasDown = true;
+      this.wasUp = false;
+    } else if (isUp && this.wasDown) {
+      result.repIncrement = 1;
+      this.wasDown = false;
+      this.wasUp = true;
     }
 
     return result;
@@ -275,6 +340,63 @@ export function getLandmarkName(index: number): string {
     32: 'right_foot_index',
   };
   return names[index] || `landmark_${index}`;
+}
+
+/**
+ * Detect water drinking based on pose landmarks.
+ * Looks for hand/wrist position near the mouth/face area.
+ */
+export function detectWaterDrinking(landmarks: PoseLandmark[]): boolean {
+  if (!landmarks || landmarks.length < 33) return false;
+
+  // Key landmarks for water detection
+  // 0 = nose, 9 = mouth_left, 10 = mouth_right
+  // 15 = left_wrist, 16 = right_wrist
+  // 11 = left_shoulder, 12 = right_shoulder
+  
+  const nose = landmarks[0];
+  const mouthLeft = landmarks[9];
+  const mouthRight = landmarks[10];
+  const leftWrist = landmarks[15];
+  const rightWrist = landmarks[16];
+  const leftShoulder = landmarks[11];
+  const rightShoulder = landmarks[12];
+
+  if (!nose || !leftWrist || !rightWrist) return false;
+
+  // Calculate mouth center
+  const mouthCenterX = mouthLeft && mouthRight 
+    ? (mouthLeft.x + mouthRight.x) / 2 
+    : nose.x;
+  const mouthCenterY = mouthLeft && mouthRight 
+    ? (mouthLeft.y + mouthRight.y) / 2 
+    : nose.y;
+
+  // Check if either wrist is near the mouth area
+  const checkWristNearMouth = (wrist: PoseLandmark) => {
+    if (!wrist || wrist.visibility === undefined || wrist.visibility < 0.5) return false;
+    
+    const distanceX = Math.abs(wrist.x - mouthCenterX);
+    const distanceY = Math.abs(wrist.y - mouthCenterY);
+    
+    // Wrist should be close to mouth (within reasonable distance)
+    // And wrist should be above the shoulder (hand raised to mouth)
+    const isNearMouth = distanceX < 0.15 && distanceY < 0.2;
+    
+    // Check if wrist is above shoulder (indicating hand raised)
+    const avgShoulderY = leftShoulder && rightShoulder
+      ? (leftShoulder.y + rightShoulder.y) / 2
+      : 0.5;
+    const isHandRaised = wrist.y < avgShoulderY + 0.1;
+    
+    return isNearMouth && isHandRaised;
+  };
+
+  // Check both wrists
+  const leftHandDrinking = checkWristNearMouth(leftWrist);
+  const rightHandDrinking = checkWristNearMouth(rightWrist);
+
+  return leftHandDrinking || rightHandDrinking;
 }
 
 export { POSE_CONNECTIONS, POSE_LANDMARKS };

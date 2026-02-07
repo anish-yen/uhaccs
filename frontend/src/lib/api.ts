@@ -116,4 +116,35 @@ export const poseApi = {
   getAnalysis: (limit?: number) => apiRequest<PoseAnalysis[]>(`/pose/analysis${limit ? `?limit=${limit}` : ''}`),
 }
 
+// Water detection API functions
+export interface WaterDetectionData {
+  detected: boolean
+  confidence: number
+  timestamp: string
+  manual?: boolean
+}
+
+export const waterApi = {
+  // Detect water drinking (with optional confidence)
+  detect: (detected: boolean, confidence?: number) => apiRequest<{ success: boolean; message: string; pointsAwarded?: number; data: WaterDetectionData }>('/water/detect', {
+    method: 'POST',
+    body: JSON.stringify({
+      detected,
+      confidence: confidence || (detected ? 1.0 : 0),
+      timestamp: new Date().toISOString(),
+    }),
+  }),
+  
+  // Get current water detection status
+  getStatus: () => apiRequest<WaterDetectionData>('/water/status'),
+  
+  // Get water drinking history
+  getHistory: (limit?: number) => apiRequest<WaterDetectionData[]>(`/water/history${limit ? `?limit=${limit}` : ''}`),
+  
+  // Manually log water drinking
+  logManual: () => apiRequest<{ success: boolean; message: string; pointsAwarded: number; data: WaterDetectionData }>('/water/manual', {
+    method: 'POST',
+  }),
+}
+
 

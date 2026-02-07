@@ -1,16 +1,25 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Camera, CameraOff, Video, VideoOff, Zap, CheckCircle2 } from 'lucide-react'
+import { Camera, CameraOff, Video, VideoOff, Zap, CheckCircle2, Droplet } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import Webcam from 'react-webcam'
-import { createPoseDetector, SquatDetector } from '@/lib/pose-detection'
-import { userApi } from '@/lib/api'
-import type { UserStats } from '@/lib/exercise-data'
+import { createPoseDetector, SquatDetector, PushupDetector, detectWaterDrinking } from '@/lib/pose-detection'
+import { waterApi } from '@/lib/api'
+
+export type ExerciseType = 'squat' | 'pushup'
 
 interface WebcamViewProps {
   onExerciseDetected?: () => void
+  onRepComplete?: (exerciseType: ExerciseType, repCount: number) => void
+  exerciseType?: ExerciseType
+  onExerciseTypeChange?: (type: ExerciseType) => void
 }
 
-export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
+export function WebcamView({ 
+  onExerciseDetected, 
+  onRepComplete,
+  exerciseType = 'squat',
+  onExerciseTypeChange 
+}: WebcamViewProps) {
   const [isStreaming, setIsStreaming] = useState(false)
   const [hasPermission, setHasPermission] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -18,12 +27,16 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
   const [angle, setAngle] = useState<number | null>(null)
   const [formScore, setFormScore] = useState(0)
   const [isDown, setIsDown] = useState(false)
-  const [showSquatPopup, setShowSquatPopup] = useState(false)
+  const [status, setStatus] = useState<string>('')
+  const [showCompletionPopup, setShowCompletionPopup] = useState(false)
+  const [showWaterPopup, setShowWaterPopup] = useState(false)
+  const waterDetectionCooldownRef = useRef<number>(0)
 
   const webcamRef = useRef<Webcam>(null)
   const animationFrameRef = useRef<number | null>(null)
   const poseDetectorRef = useRef<any>(null)
   const squatDetectorRef = useRef(new SquatDetector())
+  const pushupDetectorRef = useRef(new PushupDetector())
   const poseBusyRef = useRef(false)
 
   // Initialize Pose once when camera starts (in handleUserMedia)
@@ -31,34 +44,51 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
     if (poseDetectorRef.current) return
     createPoseDetector((results) => {
       if (!results.detected || !results.landmarks?.length) return
-      const squat = squatDetectorRef.current.detect(results.landmarks)
-      setAngle(squat.angle)
-      setFormScore(squat.formScore)
-      setIsDown(squat.isDown)
-      if (squat.repIncrement > 0) {
-        setRepCount((c) => c + squat.repIncrement)
-        // Show popup and award XP
-        setShowSquatPopup(true)
-        setTimeout(() => setShowSquatPopup(false), 2000)
+      
+      // Check for water drinking first (independent of exercise type)
+      const now = Date.now()
+      if (now - waterDetectionCooldownRef.current > 3000) { // 3 second cooldown
+        const waterDetected = detectWaterDrinking(results.landmarks)
+        if (waterDetected) {
+          waterDetectionCooldownRef.current = now
+          
+          // Show blue water popup
+          setShowWaterPopup(true)
+          setTimeout(() => setShowWaterPopup(false), 2000)
+          
+          // Send to backend and award XP
+          waterApi.detect(true, 0.8).then((result) => {
+            if (result.data) {
+              onExerciseDetected?.() // Refresh stats
+            }
+          }).catch(err => {
+            console.warn('Failed to log water detection:', err)
+          })
+        }
+      }
+      
+      // Use appropriate detector based on exercise type
+      const detector = exerciseType === 'pushup' 
+        ? pushupDetectorRef.current 
+        : squatDetectorRef.current
+      
+      const detection = detector.detect(results.landmarks)
+      
+      setAngle(detection.angle)
+      setFormScore(detection.formScore)
+      setIsDown(detection.isDown)
+      setStatus(detection.status || '')
+      
+      if (detection.repIncrement > 0) {
+        const newRepCount = repCount + detection.repIncrement
+        setRepCount(newRepCount)
         
-        // Award +10 XP
-        userApi.getStats().then((statsResult) => {
-          if (statsResult.data) {
-            const stats = statsResult.data as UserStats
-            const currentXP = stats.currentXP || 0
-            const totalPoints = stats.totalPoints || 0
-            userApi.updateStats({
-              ...stats,
-              currentXP: currentXP + 10,
-              totalPoints: totalPoints + 10,
-            }).catch(err => {
-              console.warn('Failed to update XP:', err)
-            })
-          }
-        }).catch(err => {
-          console.warn('Failed to get stats for XP update:', err)
-        })
+        // Show popup
+        setShowCompletionPopup(true)
+        setTimeout(() => setShowCompletionPopup(false), 2000)
         
+        // Notify parent component
+        onRepComplete?.(exerciseType, newRepCount)
         onExerciseDetected?.()
       }
     })
@@ -68,7 +98,7 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
       .catch((err) => {
         console.warn('Pose detector init failed:', err)
       })
-  }, [onExerciseDetected])
+  }, [exerciseType, repCount, onExerciseDetected, onRepComplete])
 
   const loop = useCallback(() => {
     const video = webcamRef.current?.video
@@ -120,6 +150,7 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
   const stopCamera = () => {
     setIsStreaming(false)
     poseDetectorRef.current = null
+    setRepCount(0) // Reset rep count when stopping
   }
 
   const handleUserMediaError = (error: string | DOMException) => {
@@ -153,27 +184,54 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
           </div>
           <h2 className="text-lg font-bold text-foreground">Exercise Detection</h2>
         </div>
-        <button
-          onClick={isStreaming ? stopCamera : startCamera}
-          className={cn(
-            'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all',
-            isStreaming
-              ? 'bg-destructive/20 text-destructive hover:bg-destructive/30'
-              : 'bg-primary/20 text-primary hover:bg-primary/30'
-          )}
-        >
-          {isStreaming ? (
-            <>
-              <VideoOff className="h-4 w-4" />
-              Stop Camera
-            </>
-          ) : (
-            <>
-              <Video className="h-4 w-4" />
-              Start Camera
-            </>
-          )}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Exercise Type Selector */}
+          <div className="flex items-center gap-1 rounded-lg bg-card border border-border/50 p-1">
+            <button
+              onClick={() => onExerciseTypeChange?.('squat')}
+              className={cn(
+                'px-3 py-1.5 text-xs font-medium rounded-md transition-all',
+                exerciseType === 'squat'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Squat
+            </button>
+            <button
+              onClick={() => onExerciseTypeChange?.('pushup')}
+              className={cn(
+                'px-3 py-1.5 text-xs font-medium rounded-md transition-all',
+                exerciseType === 'pushup'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Pushup
+            </button>
+          </div>
+          <button
+            onClick={isStreaming ? stopCamera : startCamera}
+            className={cn(
+              'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all',
+              isStreaming
+                ? 'bg-destructive/20 text-destructive hover:bg-destructive/30'
+                : 'bg-primary/20 text-primary hover:bg-primary/30'
+            )}
+          >
+            {isStreaming ? (
+              <>
+                <VideoOff className="h-4 w-4" />
+                Stop Camera
+              </>
+            ) : (
+              <>
+                <Video className="h-4 w-4" />
+                Start Camera
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-secondary/20">
@@ -226,10 +284,16 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
         {isStreaming && (
           <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between gap-2 rounded-lg bg-black/70 px-3 py-2 backdrop-blur-sm">
             <div className="flex items-center gap-3">
-              <span className="text-sm font-medium text-white">Reps: {repCount}</span>
-              <span className="text-sm text-white/80">
-                Angle: {angle != null ? `${Math.round(angle)}°` : '--'}
-              </span>
+              {exerciseType === 'squat' && angle != null && (
+                <span className="text-sm text-white/80">
+                  Angle: {Math.round(angle)}°
+                </span>
+              )}
+              {exerciseType === 'pushup' && status && (
+                <span className="text-sm text-white/80 capitalize">
+                  {status}
+                </span>
+              )}
               <span className="text-sm text-white/80">Form: {formScore}</span>
               <span className={cn('text-xs font-medium', isDown ? 'text-amber-400' : 'text-white/80')}>
                 {isDown ? 'Down' : 'Up'}
@@ -238,8 +302,8 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
           </div>
         )}
 
-        {/* Squat Completion Popup */}
-        {showSquatPopup && (
+        {/* Exercise Completion Popup */}
+        {showCompletionPopup && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
             <div 
               className={cn(
@@ -253,7 +317,35 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
               <div className="flex items-center gap-3">
                 <CheckCircle2 className="h-12 w-12 text-white animate-pulse" />
                 <div className="flex flex-col">
-                  <h3 className="text-3xl font-bold text-white">Squat Complete!</h3>
+                  <h3 className="text-3xl font-bold text-white">
+                    {exerciseType === 'squat' ? 'Squat' : 'Pushup'} Complete!
+                  </h3>
+                  <div className="flex items-center gap-2 mt-1">
+                    <Zap className="h-5 w-5 text-yellow-300" />
+                    <span className="text-xl font-semibold text-yellow-300">+10 XP</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Water Detection Popup */}
+        {showWaterPopup && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
+            <div 
+              className={cn(
+                "flex flex-col items-center justify-center gap-4 rounded-2xl bg-blue-500/95 backdrop-blur-md px-8 py-6 shadow-2xl",
+                "border-4 border-blue-400"
+              )}
+              style={{
+                animation: 'popup 0.3s ease-out',
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <Droplet className="h-12 w-12 text-white animate-pulse" />
+                <div className="flex flex-col">
+                  <h3 className="text-3xl font-bold text-white">Water Detected!</h3>
                   <div className="flex items-center gap-2 mt-1">
                     <Zap className="h-5 w-5 text-yellow-300" />
                     <span className="text-xl font-semibold text-yellow-300">+10 XP</span>
@@ -267,7 +359,9 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
 
       {isStreaming && (
         <p className="mt-4 text-center text-xs text-muted-foreground">
-          Squats are counted automatically. Go below ~90° then stand up to ~160° to count a rep.
+          {exerciseType === 'squat' 
+            ? 'Squats are counted automatically. Go below ~90° then stand up to ~160° to count a rep.'
+            : 'Pushups are counted automatically. Lower your body down and push back up to count a rep.'}
         </p>
       )}
     </div>
