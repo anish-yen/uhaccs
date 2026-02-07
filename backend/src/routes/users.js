@@ -1,30 +1,24 @@
 const express = require("express");
 const router = express.Router();
-const { getDB } = require("../db/init");
+const { getUserById, createUser } = require("../db/users");
 
 // POST /api/users — create a new user
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   const { username } = req.body;
   if (!username) return res.status(400).json({ error: "Username is required" });
 
   try {
-    const db = getDB();
-    const stmt = db.prepare("INSERT INTO users (username) VALUES (?)");
-    const result = stmt.run(username);
-    res.status(201).json({ id: result.lastInsertRowid, username });
+    const user = await createUser({ username });
+    res.status(201).json({ id: user.id, username: user.username });
   } catch (err) {
-    if (err.message.includes("UNIQUE")) {
-      return res.status(409).json({ error: "Username already exists" });
-    }
     res.status(500).json({ error: err.message });
   }
 });
 
 // GET /api/users/:id — get user profile + points/streak
-router.get("/:id", (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
-    const db = getDB();
-    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
+    const user = await getUserById(req.params.id);
     if (!user) return res.status(404).json({ error: "User not found" });
     res.json(user);
   } catch (err) {

@@ -228,3 +228,5 @@ export function BodyHeatmap({ activation }: BodyHeatmapProps) {
   )
 }
 
+
+

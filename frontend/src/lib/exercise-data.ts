@@ -215,3 +215,5 @@ export const muscleLabels: Record<MuscleGroup, string> = {
   "upper-back": "Upper Back",
 }
 
+
+

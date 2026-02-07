@@ -1,61 +1,35 @@
-const Database = require("better-sqlite3");
-const path = require("path");
+// Database initialization - now using Redis only
+// SQLite has been removed due to build issues
 
-const DB_PATH = path.join(__dirname, "../../data/uhaccs.db");
+const { getRedisClient } = require("./redis");
 
-let db;
-
-function getDB() {
-  if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma("journal_mode = WAL");
-  }
-  return db;
-}
+let dbInitialized = false;
 
 async function initDB() {
-  const db = getDB();
+  if (dbInitialized) {
+    return;
+  }
+  
+  try {
+    // Just verify Redis connection
+    const client = await getRedisClient();
+    const pong = await client.ping();
+    if (pong === "PONG") {
+      console.log("✅ Database (Redis) initialized");
+      dbInitialized = true;
+    } else {
+      throw new Error("Redis ping failed");
+    }
+  } catch (err) {
+    console.error("❌ Failed to initialize Redis:", err.message);
+    console.error("   Please start Redis server first");
+    throw err;
+  }
+}
 
-  // --- Users table ---
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      points INTEGER DEFAULT 0,
-      current_streak INTEGER DEFAULT 0,
-      longest_streak INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // --- Reminders table ---
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS reminders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('water', 'exercise')),
-      interval_minutes INTEGER NOT NULL DEFAULT 30,
-      is_active INTEGER DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )
-  `);
-
-  // --- Activity log (tracks each completed reminder) ---
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS activity_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      reminder_id INTEGER NOT NULL,
-      type TEXT NOT NULL,
-      verified INTEGER DEFAULT 0,
-      completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (reminder_id) REFERENCES reminders(id)
-    )
-  `);
-
-  console.log("Database initialized");
+// Stub function for compatibility (no longer used)
+function getDB() {
+  throw new Error("SQLite has been removed. Use Redis instead via getRedisClient()");
 }
 
 module.exports = { initDB, getDB };

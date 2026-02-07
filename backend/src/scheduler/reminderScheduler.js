@@ -1,5 +1,7 @@
-const { getDB } = require("../db/init");
+const { getRedisClient } = require("../db/redis");
 const { sendReminder } = require("../ws/socket");
+
+const REMINDERS_KEY = (userId) => `user:${userId}:reminders`;
 
 // TODO: Implement the reminder scheduler
 //

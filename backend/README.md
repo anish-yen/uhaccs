@@ -1,8 +1,34 @@
 # UHaccs Backend
 
-Health reminder backend — Express + SQLite + WebSocket.
+Health reminder backend — Express + SQLite + WebSocket + Redis.
 
 ## Quick Start
+
+### Prerequisites
+
+- Node.js 18+
+- Redis server running (default: localhost:6379)
+
+### Install Redis
+
+**macOS:**
+```bash
+brew install redis
+brew services start redis
+```
+
+**Linux:**
+```bash
+sudo apt-get install redis-server
+sudo systemctl start redis
+```
+
+**Docker:**
+```bash
+docker run -d -p 6379:6379 redis:alpine
+```
+
+### Setup
 
 ```bash
 cd backend
@@ -14,6 +40,15 @@ npm start        # production
 
 Server runs on **http://localhost:3001**
 
+## Environment Variables
+
+Create a `.env` file (optional):
+
+```env
+PORT=3001
+REDIS_URL=redis://localhost:6379
+```
+
 ## Project Structure
 
 ```
@@ -22,11 +57,15 @@ backend/
 ├── src/
 │   ├── server.js          # Entry point — Express + WS setup
 │   ├── db/
-│   │   └── init.js        # Database init & schema
+│   │   ├── init.js        # Database init & schema
+│   │   └── redis.js       # Redis client setup
 │   ├── routes/
-│   │   ├── users.js       # User CRUD + gamification stats
+│   │   ├── users.js       # User CRUD
 │   │   ├── reminders.js   # Reminder CRUD
-│   │   └── verification.js # CV verification results from frontend
+│   │   ├── verification.js # CV verification results
+│   │   ├── exercises.js   # Exercise CRUD with Redis
+│   │   ├── stats.js       # User stats with streak calculation
+│   │   └── detection.js   # Exercise detection status
 │   ├── ws/
 │   │   └── socket.js      # WebSocket server for push notifications
 │   └── scheduler/
@@ -36,17 +75,60 @@ backend/
 
 ## API Endpoints
 
-| Method | Endpoint                  | Status | Description                    |
-|--------|---------------------------|--------|--------------------------------|
-| GET    | `/api/health`             | ✅     | Health check                   |
-| POST   | `/api/users`              | ✅     | Create user                    |
-| GET    | `/api/users/:id`          | ✅     | Get user profile               |
-| GET    | `/api/users/:id/stats`    | 🔲     | Detailed gamification stats    |
-| POST   | `/api/reminders`          | ✅     | Create reminder                |
-| GET    | `/api/reminders/:userId`  | ✅     | Get user's reminders           |
-| PATCH  | `/api/reminders/:id`      | 🔲     | Update reminder                |
-| DELETE | `/api/reminders/:id`      | 🔲     | Delete reminder                |
-| POST   | `/api/verification`       | ✅     | Log CV verification result     |
+### Health
+| Method | Endpoint                  | Description                    |
+|--------|---------------------------|--------------------------------|
+| GET    | `/api/health`             | Health check                   |
+
+### Users
+| Method | Endpoint                  | Description                    |
+|--------|---------------------------|--------------------------------|
+| POST   | `/api/users`              | Create user                    |
+| GET    | `/api/users/:id`          | Get user profile               |
+
+### Exercises (Redis-backed)
+| Method | Endpoint                  | Description                    |
+|--------|---------------------------|--------------------------------|
+| GET    | `/api/exercises?userId=default` | Get all exercises      |
+| GET    | `/api/exercises/:id?userId=default` | Get exercise by ID    |
+| POST   | `/api/exercises`          | Create exercise (auto-calculates streak) |
+| PUT    | `/api/exercises/:id?userId=default` | Update exercise      |
+| DELETE | `/api/exercises/:id?userId=default` | Delete exercise      |
+
+### User Stats (Redis-backed)
+| Method | Endpoint                  | Description                    |
+|--------|---------------------------|--------------------------------|
+| GET    | `/api/user/stats?userId=default` | Get user stats (level, XP, streak, rank) |
+| PUT    | `/api/user/stats`         | Update user stats              |
+
+### Exercise Detection
+| Method | Endpoint                  | Description                    |
+|--------|---------------------------|--------------------------------|
+| GET    | `/api/detection?userId=default` | Get detection status    |
+| POST   | `/api/detection`          | Mark exercise as detected      |
+
+## Features
+
+### Streak Calculation
+- Automatically calculates streak when exercises are created
+- Tracks consecutive days of activity
+- Resets streak if gap > 1 day
+- Updates level and rank based on XP
+
+### Redis Storage
+- Exercises stored per user in Redis
+- User stats stored in Redis
+- Detection status stored with 1-hour expiration
+- Fast read/write operations
+
+### Level & Rank System
+- **Level**: 1 level per 1000 XP
+- **Ranks**:
+  - Bronze: Levels 1-9
+  - Silver: Levels 10-19
+  - Gold: Levels 20-29
+  - Platinum: Levels 30-49
+  - Diamond: Level 50+
 
 ## WebSocket
 
@@ -54,18 +136,22 @@ Connect to `ws://localhost:3001`. Messages are JSON:
 
 ```json
 // Server → Client: reminder notification
-{ "type": "reminder", "id": 1, "type": "water", "interval_minutes": 30 }
-
-// Client → Server: register user for targeted notifications
-{ "type": "register", "userId": 1 }
+{
+  "type": "reminder",
+  "data": { ... }
+}
 ```
 
-## TODO Checklist
+## Development
 
-- [ ] Implement `reminderScheduler.js` (setInterval-based push)
-- [ ] Points & streak logic in `verification.js`
-- [ ] WebSocket user targeting (Map<userId, ws>)
-- [ ] Leaderboard broadcast
-- [ ] User stats endpoint
-- [ ] Reminder update/delete endpoints
-- [ ] Paginated activity log
+```bash
+npm run dev    # Auto-reload with nodemon
+npm start      # Production mode
+```
+
+## Testing Redis Connection
+
+```bash
+redis-cli ping
+# Should return: PONG
+```

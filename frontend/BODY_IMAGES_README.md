@@ -30,3 +30,5 @@ The component automatically switches between images based on:
 
 The heatmap circles are positioned as overlays on top of the PNG images using percentage-based coordinates for responsive scaling.
 
+
+

@@ -1,5 +1,7 @@
 // API utilities for backend communication
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api'
+
+// Note: userId is now automatically determined from session on backend
 
 export interface ApiResponse<T> {
   data?: T
@@ -13,6 +15,7 @@ export async function apiRequest<T>(
 ): Promise<ApiResponse<T>> {
   try {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      credentials: 'include', // Include cookies for session
       headers: {
         'Content-Type': 'application/json',
         ...options?.headers,
@@ -22,7 +25,7 @@ export async function apiRequest<T>(
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: 'Request failed' }))
-      return { error: error.message || 'Request failed' }
+      return { error: error.error || error.message || 'Request failed' }
     }
 
     const data = await response.json()
@@ -32,7 +35,7 @@ export async function apiRequest<T>(
   }
 }
 
-// Exercise API functions
+// Exercise API functions (userId is now from session)
 export const exerciseApi = {
   getAll: () => apiRequest('/exercises'),
   getById: (id: string) => apiRequest(`/exercises/${id}`),
@@ -49,7 +52,7 @@ export const exerciseApi = {
   }),
 }
 
-// User stats API functions
+// User stats API functions (userId is now from session)
 export const userApi = {
   getStats: () => apiRequest('/user/stats'),
   updateStats: (stats: unknown) => apiRequest('/user/stats', {
@@ -57,4 +60,17 @@ export const userApi = {
     body: JSON.stringify(stats),
   }),
 }
+
+// Detection API functions (userId is now from session)
+export const detectionApi = {
+  getStatus: () => apiRequest('/detection'),
+  setDetected: (detected: boolean, exerciseType?: string) => apiRequest('/detection', {
+    method: 'POST',
+    body: JSON.stringify({ 
+      detected, 
+      exerciseType
+    }),
+  }),
+}
+
 

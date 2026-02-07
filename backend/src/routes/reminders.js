@@ -1,9 +1,11 @@
 const express = require("express");
 const router = express.Router();
-const { getDB } = require("../db/init");
+const { getRedisClient } = require("../db/redis");
+
+const REMINDERS_KEY = (userId) => `user:${userId}:reminders`;
 
 // POST /api/reminders — create a new reminder
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   const { user_id, type, interval_minutes } = req.body;
 
   if (!user_id || !type) {
@@ -11,24 +13,34 @@ router.post("/", (req, res) => {
   }
 
   try {
-    const db = getDB();
-    const stmt = db.prepare(
-      "INSERT INTO reminders (user_id, type, interval_minutes) VALUES (?, ?, ?)"
-    );
-    const result = stmt.run(user_id, type, interval_minutes || 30);
-    res.status(201).json({ id: result.lastInsertRowid });
+    const client = await getRedisClient();
+    const remindersJson = await client.get(REMINDERS_KEY(user_id));
+    const reminders = remindersJson ? JSON.parse(remindersJson) : [];
+    
+    const newReminder = {
+      id: Date.now().toString(),
+      user_id,
+      type,
+      interval_minutes: interval_minutes || 30,
+      is_active: true,
+      created_at: new Date().toISOString(),
+    };
+    
+    reminders.push(newReminder);
+    await client.set(REMINDERS_KEY(user_id), JSON.stringify(reminders));
+    
+    res.status(201).json({ id: newReminder.id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // GET /api/reminders/:userId — get all reminders for a user
-router.get("/:userId", (req, res) => {
+router.get("/:userId", async (req, res) => {
   try {
-    const db = getDB();
-    const reminders = db
-      .prepare("SELECT * FROM reminders WHERE user_id = ?")
-      .all(req.params.userId);
+    const client = await getRedisClient();
+    const remindersJson = await client.get(REMINDERS_KEY(req.params.userId));
+    const reminders = remindersJson ? JSON.parse(remindersJson) : [];
     res.json(reminders);
   } catch (err) {
     res.status(500).json({ error: err.message });
