@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Camera, CameraOff, Video, VideoOff } from 'lucide-react'
+import { Camera, CameraOff, Video, VideoOff, Zap, CheckCircle2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import Webcam from 'react-webcam'
 import { createPoseDetector, SquatDetector } from '@/lib/pose-detection'
+import { userApi } from '@/lib/api'
+import type { UserStats } from '@/lib/exercise-data'
 
 interface WebcamViewProps {
   onExerciseDetected?: () => void
@@ -16,6 +18,7 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
   const [angle, setAngle] = useState<number | null>(null)
   const [formScore, setFormScore] = useState(0)
   const [isDown, setIsDown] = useState(false)
+  const [showSquatPopup, setShowSquatPopup] = useState(false)
 
   const webcamRef = useRef<Webcam>(null)
   const animationFrameRef = useRef<number | null>(null)
@@ -34,6 +37,28 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
       setIsDown(squat.isDown)
       if (squat.repIncrement > 0) {
         setRepCount((c) => c + squat.repIncrement)
+        // Show popup and award XP
+        setShowSquatPopup(true)
+        setTimeout(() => setShowSquatPopup(false), 2000)
+        
+        // Award +10 XP
+        userApi.getStats().then((statsResult) => {
+          if (statsResult.data) {
+            const stats = statsResult.data as UserStats
+            const currentXP = stats.currentXP || 0
+            const totalPoints = stats.totalPoints || 0
+            userApi.updateStats({
+              ...stats,
+              currentXP: currentXP + 10,
+              totalPoints: totalPoints + 10,
+            }).catch(err => {
+              console.warn('Failed to update XP:', err)
+            })
+          }
+        }).catch(err => {
+          console.warn('Failed to get stats for XP update:', err)
+        })
+        
         onExerciseDetected?.()
       }
     })
@@ -48,10 +73,17 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
   const loop = useCallback(() => {
     const video = webcamRef.current?.video
     const pose = poseDetectorRef.current
-    if (!video || !pose || video.readyState < 2) {
+    
+    if (!video || video.readyState < 2) {
       animationFrameRef.current = requestAnimationFrame(loop)
       return
     }
+    
+    if (!pose) {
+      animationFrameRef.current = requestAnimationFrame(loop)
+      return
+    }
+    
     if (poseBusyRef.current) {
       animationFrameRef.current = requestAnimationFrame(loop)
       return
@@ -119,7 +151,7 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
           <div className="rounded-lg bg-primary/20 p-2">
             <Camera className="h-5 w-5 text-primary" />
           </div>
-          <h2 className="text-lg font-bold text-foreground">Webcam View</h2>
+          <h2 className="text-lg font-bold text-foreground">Exercise Detection</h2>
         </div>
         <button
           onClick={isStreaming ? stopCamera : startCamera}
@@ -168,32 +200,31 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
         )}
 
         {isStreaming && (
-          <>
-            <Webcam
-              ref={webcamRef}
-              audio={false}
-              screenshotFormat="image/jpeg"
-              videoConstraints={{
-                width: { ideal: 1280, min: 640 },
-                height: { ideal: 720, min: 480 },
-                facingMode: 'user',
-                frameRate: { ideal: 30, min: 15 },
-              }}
-              onUserMedia={handleUserMedia}
-              onUserMediaError={handleUserMediaError}
-              className="h-full w-full object-cover"
-              style={{
-                display: 'block',
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover',
-              }}
-            />
-          </>
+          <Webcam
+            ref={webcamRef}
+            audio={false}
+            screenshotFormat="image/jpeg"
+            videoConstraints={{
+              width: { ideal: 1280, min: 640 },
+              height: { ideal: 720, min: 480 },
+              facingMode: 'user',
+              frameRate: { ideal: 30, min: 15 },
+            }}
+            onUserMedia={handleUserMedia}
+            onUserMediaError={handleUserMediaError}
+            className="h-full w-full object-cover"
+            style={{
+              display: 'block',
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+            }}
+            mirrored={true}
+          />
         )}
 
         {isStreaming && (
-          <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between gap-2 rounded-lg bg-black/50 px-3 py-2 backdrop-blur-sm">
+          <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between gap-2 rounded-lg bg-black/70 px-3 py-2 backdrop-blur-sm">
             <div className="flex items-center gap-3">
               <span className="text-sm font-medium text-white">Reps: {repCount}</span>
               <span className="text-sm text-white/80">
@@ -203,6 +234,32 @@ export function WebcamView({ onExerciseDetected }: WebcamViewProps) {
               <span className={cn('text-xs font-medium', isDown ? 'text-amber-400' : 'text-white/80')}>
                 {isDown ? 'Down' : 'Up'}
               </span>
+            </div>
+          </div>
+        )}
+
+        {/* Squat Completion Popup */}
+        {showSquatPopup && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
+            <div 
+              className={cn(
+                "flex flex-col items-center justify-center gap-4 rounded-2xl bg-green-500/95 backdrop-blur-md px-8 py-6 shadow-2xl",
+                "border-4 border-green-400"
+              )}
+              style={{
+                animation: 'popup 0.3s ease-out',
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="h-12 w-12 text-white animate-pulse" />
+                <div className="flex flex-col">
+                  <h3 className="text-3xl font-bold text-white">Squat Complete!</h3>
+                  <div className="flex items-center gap-2 mt-1">
+                    <Zap className="h-5 w-5 text-yellow-300" />
+                    <span className="text-xl font-semibold text-yellow-300">+10 XP</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         )}
