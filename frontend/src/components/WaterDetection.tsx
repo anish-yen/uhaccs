@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Droplet, DropletIcon, Zap, CheckCircle2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { waterApi, type WaterDetectionData } from '@/lib/api'
+import { waterApi, type WaterDetectionData, verificationApi } from '@/lib/api'
 
 interface WaterDetectionProps {
   onWaterDetected?: () => void
@@ -10,6 +10,7 @@ interface WaterDetectionProps {
 export function WaterDetection({ onWaterDetected }: WaterDetectionProps) {
   const [waterCount, setWaterCount] = useState(0)
   const [showPopup, setShowPopup] = useState(false)
+  const [popupText, setPopupText] = useState<string>('')
   const [isLogging, setIsLogging] = useState(false)
   const [todayHistory, setTodayHistory] = useState<WaterDetectionData[]>([])
 
@@ -35,22 +36,34 @@ export function WaterDetection({ onWaterDetected }: WaterDetectionProps) {
     
     setIsLogging(true)
     try {
-      const result = await waterApi.logManual()
-      if (result.data) {
+      // Call verification endpoint to award points
+      const verifyResult = await verificationApi.verify({
+        type: 'water',
+        verified: true,
+      })
+      
+      if (verifyResult.data) {
         const newCount = waterCount + 1
         setWaterCount(newCount)
         
-        // Show popup
+        // Show popup with points awarded
+        setPopupText(`+${verifyResult.data.points_awarded} XP`)
         setShowPopup(true)
         setTimeout(() => setShowPopup(false), 2000)
         
         // Add to today's history
-        if (result.data.data) {
-          setTodayHistory(prev => [result.data.data!, ...prev])
+        const waterData: WaterDetectionData = {
+          detected: true,
+          confidence: 1.0,
+          timestamp: new Date().toISOString(),
+          manual: true,
         }
+        setTodayHistory(prev => [waterData, ...prev])
         
-        // Notify parent
+        // Notify parent to refresh dashboard stats
         onWaterDetected?.()
+      } else if (verifyResult.error) {
+        console.error('Failed to verify water intake:', verifyResult.error)
       }
     } catch (error) {
       console.error('Failed to log water:', error)
@@ -120,7 +133,7 @@ export function WaterDetection({ onWaterDetected }: WaterDetectionProps) {
                   <h3 className="text-3xl font-bold text-white">Water Logged!</h3>
                   <div className="flex items-center gap-2 mt-1">
                     <Zap className="h-5 w-5 text-yellow-300" />
-                    <span className="text-xl font-semibold text-yellow-300">+10 XP</span>
+                    <span className="text-xl font-semibold text-yellow-300">{popupText}</span>
                   </div>
                 </div>
               </div>

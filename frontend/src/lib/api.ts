@@ -1,5 +1,7 @@
 // API utilities for backend communication
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api'
+// In dev, Vite proxies /api → http://localhost:3001 (see vite.config.ts)
+// so we use a relative path. In production, set VITE_API_URL to the real backend.
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
 
 // Note: userId is now automatically determined from session on backend
 
@@ -145,6 +147,66 @@ export const waterApi = {
   logManual: () => apiRequest<{ success: boolean; message: string; pointsAwarded: number; data: WaterDetectionData }>('/water/manual', {
     method: 'POST',
   }),
+}
+
+// Verification API - for CV detections and activity verification
+export interface VerificationRequest {
+  user_id?: number
+  reminder_id?: number
+  type: 'water' | 'exercise'
+  verified: boolean
+}
+
+export interface VerificationResponse {
+  success: boolean
+  points_awarded: number
+  base_points: number
+  streak_bonus: number
+  total_points: number
+  current_streak: number
+}
+
+export const verificationApi = {
+  // Verify an activity (water or exercise) and award points
+  verify: (payload: VerificationRequest) => apiRequest<VerificationResponse>('/verification', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+}
+
+// Reminder API - manage scheduled reminders
+export interface Reminder {
+  id: number
+  user_id: number
+  type: 'water' | 'exercise'
+  interval_minutes: number
+  is_active: number
+  created_at?: string
+}
+
+export const reminderApi = {
+  // Get all reminders for a user
+  getAll: (userId: number = 1) => apiRequest<Reminder[]>(`/reminders/${userId}`),
+
+  // Create a new reminder
+  create: (payload: { user_id?: number; type: 'water' | 'exercise'; interval_minutes: number }) =>
+    apiRequest<Reminder>('/reminders', {
+      method: 'POST',
+      body: JSON.stringify({ user_id: payload.user_id || 1, ...payload }),
+    }),
+
+  // Update a reminder (interval or active state)
+  update: (id: number, payload: { interval_minutes?: number; is_active?: boolean }) =>
+    apiRequest<Reminder>(`/reminders/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+
+  // Delete a reminder
+  delete: (id: number) =>
+    apiRequest<{ success: boolean }>(`/reminders/${id}`, {
+      method: 'DELETE',
+    }),
 }
 
 

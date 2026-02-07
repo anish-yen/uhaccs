@@ -14,12 +14,16 @@ const STREAK_BREAK_MINUTES = 120; // If no verification for 120min, streak break
 
 // ── POST /api/verification ─────────────────────────────────────────
 // Frontend sends: { user_id, reminder_id, type, verified }
+// user_id defaults to 1 (single-user mode)
+// reminder_id defaults to 0 (direct frontend call, not from a reminder)
 // Returns: { success, points_awarded, total_points, streak, message }
 router.post("/", (req, res) => {
-  const { user_id, reminder_id, type, verified } = req.body;
+  const { type, verified } = req.body;
+  const user_id = req.body.user_id || 1;
+  const reminder_id = req.body.reminder_id || 0;
 
-  if (!user_id || !reminder_id || !type) {
-    return res.status(400).json({ error: "user_id, reminder_id, and type are required" });
+  if (!type) {
+    return res.status(400).json({ error: "type is required" });
   }
 
   const db = getDB();
@@ -38,10 +42,11 @@ router.post("/", (req, res) => {
         return res.status(404).json({ error: "User not found" });
       }
 
-      // Log the activity
+      // Log the activity (reminder_id can be null for direct frontend calls)
+      const logReminderId = reminder_id > 0 ? reminder_id : null;
       db.run(
         "INSERT INTO activity_log (user_id, reminder_id, type, verified) VALUES (?, ?, ?, ?)",
-        [user_id, reminder_id, type, verified ? 1 : 0],
+        [user_id, logReminderId, type, verified ? 1 : 0],
         (logErr) => {
           if (logErr) {
             console.error("❌ DB error logging activity:", logErr);

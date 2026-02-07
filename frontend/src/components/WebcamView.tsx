@@ -3,7 +3,7 @@ import { Camera, CameraOff, Video, VideoOff, Zap, CheckCircle2, Droplet } from '
 import { cn } from '@/lib/utils'
 import Webcam from 'react-webcam'
 import { createPoseDetector, SquatDetector, PushupDetector, detectWaterDrinking } from '@/lib/pose-detection'
-import { waterApi } from '@/lib/api'
+import { verificationApi } from '@/lib/api'
 
 export type ExerciseType = 'squat' | 'pushup'
 
@@ -30,6 +30,7 @@ export function WebcamView({
   const [status, setStatus] = useState<string>('')
   const [showCompletionPopup, setShowCompletionPopup] = useState(false)
   const [showWaterPopup, setShowWaterPopup] = useState(false)
+  const [pointsEarned, setPointsEarned] = useState(0)
   const waterDetectionCooldownRef = useRef<number>(0)
 
   const webcamRef = useRef<Webcam>(null)
@@ -56,9 +57,13 @@ export function WebcamView({
           setShowWaterPopup(true)
           setTimeout(() => setShowWaterPopup(false), 2000)
           
-          // Send to backend and award XP
-          waterApi.detect(true, 0.8).then((result) => {
+          // Send to backend and award points
+          verificationApi.verify({
+            type: 'water',
+            verified: true,
+          }).then(result => {
             if (result.data) {
+              setPointsEarned(result.data.points_awarded)
               onExerciseDetected?.() // Refresh stats
             }
           }).catch(err => {
@@ -82,6 +87,18 @@ export function WebcamView({
       if (detection.repIncrement > 0) {
         const newRepCount = repCount + detection.repIncrement
         setRepCount(newRepCount)
+        
+        // Call verification endpoint to award points
+        verificationApi.verify({
+          type: 'exercise',
+          verified: true,
+        }).then(result => {
+          if (result.data) {
+            setPointsEarned(result.data.points_awarded)
+          }
+        }).catch(err => {
+          console.warn('Failed to verify exercise:', err)
+        })
         
         // Show popup
         setShowCompletionPopup(true)
@@ -322,7 +339,9 @@ export function WebcamView({
                   </h3>
                   <div className="flex items-center gap-2 mt-1">
                     <Zap className="h-5 w-5 text-yellow-300" />
-                    <span className="text-xl font-semibold text-yellow-300">+10 XP</span>
+                    <span className="text-xl font-semibold text-yellow-300">
+                      {pointsEarned > 0 ? `+${pointsEarned} XP` : '+25 XP'}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -348,7 +367,9 @@ export function WebcamView({
                   <h3 className="text-3xl font-bold text-white">Water Detected!</h3>
                   <div className="flex items-center gap-2 mt-1">
                     <Zap className="h-5 w-5 text-yellow-300" />
-                    <span className="text-xl font-semibold text-yellow-300">+10 XP</span>
+                    <span className="text-xl font-semibold text-yellow-300">
+                      {pointsEarned > 0 ? `+${pointsEarned} XP` : '+10 XP'}
+                    </span>
                   </div>
                 </div>
               </div>

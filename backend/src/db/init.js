@@ -55,7 +55,7 @@ function initDB() {
           CREATE TABLE IF NOT EXISTS activity_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            reminder_id INTEGER NOT NULL,
+            reminder_id INTEGER,
             type TEXT NOT NULL,
             verified INTEGER DEFAULT 0,
             completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,

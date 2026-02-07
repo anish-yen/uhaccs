@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react"
+import { useMemo, useState, useEffect, useCallback, useRef } from "react"
 import { Trophy, Zap, Flame, Target, Award, Camera, Loader2, LogOut, User as UserIcon } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { BodyHeatmap } from "@/components/BodyHeatmap"
@@ -24,27 +24,115 @@ export function Dashboard() {
   })
   const [loading, setLoading] = useState(true)
   const [exerciseDetected, setExerciseDetected] = useState(false)
-  const [checkingDetection, setCheckingDetection] = useState(true)
   const [user, setUser] = useState<User | null>(null)
   const [checkingAuth, setCheckingAuth] = useState(true)
   const [sessionReps, setSessionReps] = useState(0)
   const [exerciseType, setExerciseType] = useState<ExerciseType>('squat')
-  
-  // Refresh stats periodically to keep XP bar updated from backend
+  const wsRef = useRef<WebSocket | null>(null)
+  const [statsFlash, setStatsFlash] = useState(false)
+  const [lastPointsEarned, setLastPointsEarned] = useState(0)
+  const prevTotalPointsRef = useRef(0)
+
+  // Flash the header stats when totalPoints changes
   useEffect(() => {
-    if (!exerciseDetected) return
-    
-    const refreshStats = async () => {
+    if (prevTotalPointsRef.current > 0 && userStats.totalPoints > prevTotalPointsRef.current) {
+      const diff = userStats.totalPoints - prevTotalPointsRef.current
+      setLastPointsEarned(diff)
+      setStatsFlash(true)
+      const timer = setTimeout(() => {
+        setStatsFlash(false)
+        setLastPointsEarned(0)
+      }, 2000)
+      prevTotalPointsRef.current = userStats.totalPoints
+      return () => clearTimeout(timer)
+    }
+    prevTotalPointsRef.current = userStats.totalPoints
+  }, [userStats.totalPoints])
+
+  // Helper to refresh stats from backend
+  const refreshStats = useCallback(async () => {
+    try {
       const statsResult = await userApi.getStats()
+      console.log('📊 Stats fetched:', statsResult)
       if (statsResult.data) {
         setUserStats(statsResult.data as UserStats)
       }
-    }
-    
-    // Refresh every 2 seconds when exercise is detected
-    const interval = setInterval(refreshStats, 2000)
+    } catch (_e) { console.error('Stats fetch error:', _e) }
+  }, [])
+  
+  // Refresh stats periodically — always, not just when exercise detected
+  useEffect(() => {
+    // Initial fetch right away
+    refreshStats()
+    // Then poll every 3 seconds
+    const interval = setInterval(refreshStats, 3000)
     return () => clearInterval(interval)
-  }, [exerciseDetected])
+  }, [refreshStats])
+
+  // ── WebSocket: real-time score updates from backend ──
+  useEffect(() => {
+    // WebSocket connects directly to the backend (not through Vite proxy)
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const WS_URL = import.meta.env.VITE_WS_URL || `${wsProtocol}//localhost:3001`
+
+    let ws: WebSocket
+    let reconnectTimer: ReturnType<typeof setTimeout>
+
+    const connect = () => {
+      ws = new WebSocket(WS_URL)
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        console.log('🔌 WebSocket connected')
+        ws.send(JSON.stringify({ type: 'register', userId: 1 }))
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+
+          if (data.type === 'score_update') {
+            const tp = data.totalPoints ?? 0
+            const newLevel = Math.floor(tp / 1000) + 1
+            const xpInLevel = tp % 1000
+            const ranks = ['Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond']
+            const rankIdx = Math.min(Math.floor((newLevel - 1) / 5), ranks.length - 1)
+
+            setUserStats(prev => ({
+              ...prev,
+              totalPoints: tp,
+              streak: data.streakCount ?? prev.streak,
+              level: newLevel,
+              currentXP: xpInLevel,
+              nextLevelXP: 1000,
+              rank: ranks[rankIdx],
+            }))
+          }
+
+          if (data.type === 'user_stats') {
+            setUserStats(prev => ({ ...prev, ...data.stats }))
+          }
+        } catch (e) {
+          console.error('WebSocket parse error:', e)
+        }
+      }
+
+      ws.onclose = () => {
+        console.log('🔌 WebSocket disconnected, reconnecting in 3s...')
+        reconnectTimer = setTimeout(connect, 3000)
+      }
+
+      ws.onerror = () => ws.close()
+    }
+
+    connect()
+
+    return () => {
+      clearTimeout(reconnectTimer)
+      wsRef.current = null
+      if (ws && ws.readyState === WebSocket.OPEN) ws.close()
+    }
+  }, [])
 
   const activation = useMemo(() => getMuscleActivation(exercises), [exercises])
 
@@ -62,7 +150,7 @@ export function Dashboard() {
         } else {
           // Check if OAuth is configured by trying the auth endpoint
           try {
-            const authCheck = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001/api'}/auth/google`, {
+            const authCheck = await fetch(`/api/auth/google`, {
               method: 'HEAD',
               credentials: 'include',
             })
@@ -85,32 +173,28 @@ export function Dashboard() {
     checkAuth()
   }, [navigate])
 
-  // Check detection status and load data
+  // Load initial data
   useEffect(() => {
     if (checkingAuth) return
 
     const loadData = async () => {
       try {
-        // Check if exercise has been detected
+        // Always load user stats from backend
+        const statsResult = await userApi.getStats()
+        if (statsResult.data) {
+          setUserStats(statsResult.data as UserStats)
+        }
+
+        // Check if exercise has been detected (for history)
         const detectionResult = await detectionApi.getStatus()
         if (detectionResult.data) {
-          setExerciseDetected(detectionResult.data.detected)
+          setExerciseDetected((detectionResult.data as { detected: boolean }).detected)
         }
-        setCheckingDetection(false)
 
-        // Only load data if exercise has been detected
-        if (detectionResult.data?.detected) {
-          // Load exercises
-          const exercisesResult = await exerciseApi.getAll()
-          if (exercisesResult.data) {
-            setExercises(exercisesResult.data)
-          }
-
-          // Load user stats
-          const statsResult = await userApi.getStats()
-          if (statsResult.data) {
-            setUserStats(statsResult.data)
-          }
+        // Load exercises if available
+        const exercisesResult = await exerciseApi.getAll()
+        if (exercisesResult.data) {
+          setExercises(exercisesResult.data as Exercise[])
         }
       } catch (error) {
         console.error("Error loading data:", error)
@@ -120,26 +204,7 @@ export function Dashboard() {
     }
 
     loadData()
-
-    // Poll for detection status changes
-    const interval = setInterval(async () => {
-      const detectionResult = await detectionApi.getStatus()
-      if (detectionResult.data?.detected && !exerciseDetected) {
-        setExerciseDetected(true)
-        // Reload data when exercise is detected
-        const exercisesResult = await exerciseApi.getAll()
-        if (exercisesResult.data) {
-          setExercises(exercisesResult.data)
-        }
-        const statsResult = await userApi.getStats()
-        if (statsResult.data) {
-          setUserStats(statsResult.data)
-        }
-      }
-    }, 2000) // Check every 2 seconds
-
-    return () => clearInterval(interval)
-  }, [exerciseDetected, checkingAuth])
+  }, [checkingAuth])
 
   const handleLogout = async () => {
     await logout()
@@ -192,13 +257,20 @@ export function Dashboard() {
               </div>
             )}
 
-            {/* XP Progress */}
-            <div className="hidden sm:flex items-center gap-2 rounded-xl bg-card border border-border/50 px-4 py-2">
-              <Zap className="h-4 w-4 text-accent" />
+            {/* XP Progress — always visible */}
+            <div className={`flex items-center gap-2 rounded-xl border px-4 py-2 transition-all duration-500 ${
+              statsFlash 
+                ? 'bg-accent/30 border-accent shadow-lg shadow-accent/20 scale-105' 
+                : 'bg-card border-border/50'
+            }`}>
+              <Zap className={`h-4 w-4 ${statsFlash ? 'text-yellow-400 animate-bounce' : 'text-accent'}`} />
               <div className="flex flex-col">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-bold text-foreground">{userStats.currentXP.toLocaleString()}</span>
                   <span className="text-xs text-muted-foreground">/ {userStats.nextLevelXP.toLocaleString()} XP</span>
+                  {statsFlash && lastPointsEarned > 0 && (
+                    <span className="text-xs font-bold text-green-400 animate-bounce">+{lastPointsEarned}</span>
+                  )}
                 </div>
                 <div className="h-1.5 w-32 rounded-full bg-secondary overflow-hidden">
                   <div 
@@ -210,17 +282,25 @@ export function Dashboard() {
             </div>
 
             {/* Streak */}
-            <div className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-accent/20 to-accent/10 border border-accent/30 px-3 py-2">
-              <Flame className="h-4 w-4 text-accent animate-pulse" />
+            <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 transition-all duration-500 ${
+              statsFlash
+                ? 'bg-accent/30 border-accent shadow-lg shadow-accent/20 scale-105'
+                : 'bg-gradient-to-r from-accent/20 to-accent/10 border-accent/30'
+            }`}>
+              <Flame className={`h-4 w-4 text-accent ${statsFlash ? 'animate-bounce' : 'animate-pulse'}`} />
               <div className="flex flex-col">
                 <span className="text-xs text-muted-foreground">Streak</span>
-                <span className="text-sm font-bold text-accent">{userStats.streak} days</span>
+                <span className="text-sm font-bold text-accent">{userStats.streak}</span>
               </div>
             </div>
 
             {/* Total Points */}
-            <div className="flex items-center gap-2 rounded-xl bg-card border border-border/50 px-3 py-2">
-              <Award className="h-4 w-4 text-primary" />
+            <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 transition-all duration-500 ${
+              statsFlash
+                ? 'bg-primary/30 border-primary shadow-lg shadow-primary/20 scale-105'
+                : 'bg-card border-border/50'
+            }`}>
+              <Award className={`h-4 w-4 text-primary ${statsFlash ? 'animate-bounce' : ''}`} />
               <div className="flex flex-col">
                 <span className="text-xs text-muted-foreground">Total</span>
                 <span className="text-sm font-bold text-foreground">{userStats.totalPoints.toLocaleString()}</span>
@@ -284,33 +364,15 @@ export function Dashboard() {
             <WebcamView 
               onExerciseDetected={async () => {
                 setExerciseDetected(true)
-                // Refresh user stats to update XP bar
-                const statsResult = await userApi.getStats()
-                if (statsResult.data) {
-                  setUserStats(statsResult.data as UserStats)
-                }
+                // Mark detection on backend so it persists
+                detectionApi.setDetected(true, exerciseType)
+                // Refresh user stats from backend (small delay for DB write)
+                setTimeout(refreshStats, 300)
               }}
               onRepComplete={async (_type, repCount) => {
                 setSessionReps(repCount)
-                // Award XP and save to backend profile
-                const statsResult = await userApi.getStats()
-                if (statsResult.data) {
-                  const stats = statsResult.data as UserStats
-                  const updatedStats = {
-                    ...stats,
-                    currentXP: stats.currentXP + 10,
-                    totalPoints: stats.totalPoints + 10,
-                  }
-                  // Save to backend - this updates the profile XP
-                  const updateResult = await userApi.updateStats(updatedStats)
-                  if (updateResult.data) {
-                    // Use the data returned from backend to ensure consistency
-                    setUserStats(updateResult.data as UserStats)
-                  } else {
-                    // Fallback to local state if update fails
-                    setUserStats(updatedStats)
-                  }
-                }
+                // Refresh stats from backend (small delay for DB write)
+                setTimeout(refreshStats, 300)
               }}
               exerciseType={exerciseType}
               onExerciseTypeChange={(type) => {
@@ -319,26 +381,10 @@ export function Dashboard() {
               }}
             />
           </div>
-        ) : checkingDetection || loading ? (
+        ) : loading ? (
           <div className="flex flex-col items-center justify-center py-20">
             <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
             <p className="text-sm text-muted-foreground">Loading...</p>
-          </div>
-        ) : !exerciseDetected ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Camera className="h-16 w-16 text-muted-foreground/50 mb-4" />
-            <h2 className="text-2xl font-bold text-foreground mb-2">No Exercise Detected</h2>
-            <p className="text-muted-foreground mb-6 max-w-md">
-              Please go to the Webcam tab and start your camera to detect exercises. 
-              Once an exercise is detected, your dashboard data will appear here.
-            </p>
-            <button
-              onClick={() => setActiveTab("webcam")}
-              className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-all"
-            >
-              <Camera className="h-4 w-4" />
-              Go to Webcam
-            </button>
           </div>
         ) : activeTab === "dashboard" ? (
           <>
@@ -346,11 +392,8 @@ export function Dashboard() {
             <div className="mb-6">
               <WaterDetection 
                 onWaterDetected={async () => {
-                  // Refresh stats when water is detected
-                  const statsResult = await userApi.getStats()
-                  if (statsResult.data) {
-                    setUserStats(statsResult.data as UserStats)
-                  }
+                  // Small delay to ensure DB write completes, then refresh
+                  setTimeout(refreshStats, 300)
                 }}
               />
             </div>
